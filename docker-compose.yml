@@ -1,0 +1,11 @@
+version: "3"
+services:
+  mongodb:
+    image: mongo
+  app:
+    build: ./
+    depends_on:
+      - mongodb
+    ports:
+      - 4711:9090
+    command: ["/usr/local/bin/dockerize" ,"-wait","tcp://mongodb:27017","/usr/local/bin/gridfsserve","-url","mongodb:27017"]
