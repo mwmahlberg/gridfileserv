@@ -15,7 +15,7 @@ COPY . .
 RUN go build -o main .
 
 FROM alpine:latest
-COPY --from=BUILD /app/main /usr/local/bin/gridfsserve 
+COPY --from=BUILD /app/main /usr/local/bin/gridfileserv 
 
 # We use jwilder/dockerize to ensure MongoDB is started and ready before our application starts.
 ENV DOCKERIZE_VERSION v0.6.1
@@ -23,4 +23,4 @@ RUN apk add --no-cache openssl && wget https://github.com/jwilder/dockerize/rele
     && tar -C /usr/local/bin -xzvf dockerize-alpine-linux-amd64-$DOCKERIZE_VERSION.tar.gz \
     && rm dockerize-alpine-linux-amd64-$DOCKERIZE_VERSION.tar.gz
 
-CMD ["/usr/local/bin/dockerize" ,"-wait","tcp://localhost:27017","/usr/local/bin/gridfsserve"]
+CMD ["/usr/local/bin/dockerize" ,"-wait","tcp://localhost:27017","/usr/local/bin/gridfileserv"]

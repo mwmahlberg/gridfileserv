@@ -8,4 +8,4 @@ services:
       - mongodb
     ports:
       - 4711:9090
-    command: ["/usr/local/bin/dockerize" ,"-wait","tcp://mongodb:27017","/usr/local/bin/gridfsserve","-url","mongodb:27017"]
+    command: ["/usr/local/bin/dockerize" ,"-wait","tcp://mongodb:27017","/usr/local/bin/gridfileserv","-url","mongodb:27017"]
