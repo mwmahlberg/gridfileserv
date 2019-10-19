@@ -3,6 +3,8 @@ gridfileserv
 
 This repository contains code for the answer to a question on Stackoverflow: [How to handle video and image upload to storage servers?](https://stackoverflow.com/questions/58459117/how-to-handle-video-and-image-upload-to-storage-servers)
 
+gridfileserv implements a http server which uses either a directory or MongoDB GridFS to store files uploaded to it.
+
 Installation
 ------------
 
@@ -51,6 +53,7 @@ $ go build
 [...]
 ```
 
+#### Option 1: MongoDB GridFS storage
 Next, you need a connection to a MongoDB instance. If you have Docker installed, you can simply run:
 
 ```shell
@@ -58,20 +61,31 @@ $ docker run -d --name mongotest -p 27017:27017 mongo
 1d1492408639f5ef650b25357af7392f56a9b710b904a0831dc65db4396624c2
 ```
 
-Last but not least, you need to start the application:
+Note that the output on your machine will be different.
 
-    gridfileserv [-listen [[hostnameOrIp]:port]] [-url otherThanLocalhost:27017] [-user <mongodbUsername> [-pass <mongodbPassword>] ]
+Last but not least, you need to start the application.
+
+    gridfileserv mongodb [-listen [[hostnameOrIp]:port]] [-url otherThanLocalhost:27017] [-user <mongodbUsername> [-pass <mongodbPassword>] ]
 
 You can pass the `-h` flag for details.
 
 For example:
 
 ```shell
-$ path/to/gridfileserv -listen :4711
+$ path/to/gridfileserv mongodb -listen :4711
 2019/10/19 19:54:36 Starting webserver on :4711
 ```
 
-Note that the output on your machine will be different.
+#### Option 2: Filesystem storage
+
+   gridfileserv file [-listen [[hostnameOrIp]:port]] [-base <path/to/file/repository>]
+
+For example:
+
+```shell
+$ path/to/gridfileserv file -listen :4711 -base ./data
+2019/10/19 19:54:36 Starting webserver on :4711
+```
 
 Usage
 -----
@@ -111,7 +125,7 @@ Content-Type: text/plain; charset=utf-8
 ### Retrieve a file
 
 ```shell
-$ curl -iv -O http://localhost:4711/files/osx.png 
+$ curl -O http://localhost:4711/files/osx.png
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying ::1:4711...
