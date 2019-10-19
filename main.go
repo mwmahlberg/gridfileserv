@@ -20,7 +20,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -28,12 +27,9 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strings"
 
+	"github.com/mwmahlberg/gridfileserv/store"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/gridfs"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type contextKey string
@@ -45,13 +41,17 @@ type meta struct {
 
 const filename contextKey = "filename"
 
-// the
-var mongoHost string
-var mongoUser string
-var mongoPass string
-var db string
-var fs string
+var mongodb = flag.NewFlagSet("mongodb", flag.ExitOnError)
+var mongoHost = mongodb.String("url", "localhost:27017", "MongoDB URL to connect to")
+var mongoUser = mongodb.String("user", "", "username to authenticate against MongoDB")
+var mongoPass = mongodb.String("pass", "", "password to use for authentication")
+var db = mongodb.String("db", "test", "database to use")
+var fs = mongodb.String("gridfs", "example", "GridFS to use")
+
 var listen string
+
+var filedb = flag.NewFlagSet("file", flag.ExitOnError)
+var basepath = filedb.String("base", "./data", "base path to store files into")
 
 // Since we are using only the standard library aside from the MongoDB driver,
 // we need to be able to examine the URLs called.
@@ -65,15 +65,12 @@ var pattern = `^/files/(?P<filename>[\w.]*)$`
 var pathRegex = regexp.MustCompile(pattern)
 
 func init() {
-	// Setup the required flags
-	flag.StringVar(&mongoHost, "url", "localhost:27017", "MongoDB URL to connect to")
-	flag.StringVar(&mongoUser, "user", "", "username to authenticate against MongoDB")
-	flag.StringVar(&mongoPass, "pass", "", "password to use for authentication")
 
-	flag.StringVar(&db, "db", "test", "database to use")
-	flag.StringVar(&fs, "gridfs", "example", "GridFS to use")
+	// A rather ugly hack caused by the fact that the flag package does not know shared
+	// flags
+	mongodb.StringVar(&listen, "listen", ":9090", "port the webserver listens on")
+	filedb.StringVar(&listen, "listen", ":9090", "port the webserver listens on")
 
-	flag.StringVar(&listen, "listen", ":9090", "adress to listen on")
 }
 
 // dispatch handles each incoming request.
@@ -107,9 +104,9 @@ func dispatch(get, post http.Handler) http.Handler {
 }
 
 // getHandler extracts the requested filename from the context, as the dispatcher already
-// extracted it for us. It then tries to find a file with the according name and efficiently
+// extracted it for us. It then tries to find a file in the repo with the according name and efficiently
 // streams it to the response writer.
-func getHandler(bucket *gridfs.Bucket) http.Handler {
+func getHandler(ret Retriever) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		// Something is seriously wrong - all requests should have a filename in the context after
@@ -121,8 +118,8 @@ func getHandler(bucket *gridfs.Bucket) http.Handler {
 		// Extract the filename from the context...
 		name := r.Context().Value(filename).(string)
 
-		// ...and simply let the bucket handle the streaming.
-		_, err := bucket.DownloadToStreamByName(name, w)
+		// ...and simply let the repo handle the streaming.
+		err := ret.StreamFrom(name, w)
 
 		// Technically, it could be a NotFound and stuff, but I leave this for brevity.
 		if err != nil {
@@ -132,14 +129,11 @@ func getHandler(bucket *gridfs.Bucket) http.Handler {
 			log.Printf("'%s' %d %s", r.RequestURI, status, txt)
 			return
 		}
-		log.Printf("'%s' %d", r.RequestURI, http.StatusOK)
 	})
 }
 
-// postHandler takes the request body verbatim and writes it to the GridFS bucket.
-// Note that you should add some additional security measures here,  other than limiting the size
-// via io.LimitReader.
-func postHandler(bucket *gridfs.Bucket) http.Handler {
+// postHandler takes the request body verbatim and streams it to the repo.
+func postHandler(store Storer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		// Something is seriously wrong - all requests should have a filename in the context after
@@ -152,70 +146,48 @@ func postHandler(bucket *gridfs.Bucket) http.Handler {
 		name := r.Context().Value(filename).(string)
 
 		// And create an upload of the request body, limited to 32MB in size
-		gid, err := bucket.UploadFromStream(name, io.LimitReader(r.Body, 32<<20))
-		if err != nil {
+		if err := store.StreamTo(name, io.LimitReader(r.Body, 32<<20)); err != nil {
 			http.Error(w, fmt.Sprintf("uploading '%s': %s", name, err), http.StatusInternalServerError)
 		}
+		r.Body.Close()
 
-		// Answer with a JSON containing the filename and the ID of the newly uploaded file.
-		enc := json.NewEncoder(w)
-		enc.Encode(&meta{ID: gid, Name: name})
 	})
 }
 
 func main() {
-	flag.Parse()
+	if len(os.Args) < 2 {
+		fmt.Println("mongodb or file subcommand is required")
+		os.Exit(1)
+	}
 
-	if mongoHost == "" {
-		fmt.Println("Need a MongoDB host to connect to")
+	// Our repository, which is a composition of Storer and Reetriever plus a Close method for cleanup.
+	var repo Repository
+	var err error
+
+	switch os.Args[1] {
+	// Depending on the subcommand selected, we parse our flags and set the repo accordingly
+	case "mongodb":
+		mongodb.Parse(os.Args[2:])
+		repo, err = store.NewMongoDB(*mongoHost, *mongoUser, *mongoPass, *db, *fs)
+
+	case "file":
+		filedb.Parse(os.Args[2:])
+		repo, err = store.NewFile(*basepath)
+	default:
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
-	// We construct our URI based on the flags given.
-	var uri strings.Builder
-
-	// The protocol...
-	uri.WriteString("mongodb://")
-
-	if mongoUser != "" {
-		// Let's check wether we can construct a `user:password` combination.
-		// We have a username, we add it.
-		uri.WriteString(mongoUser)
-
-		if mongoPass != "" {
-			// Dito for password, with divider
-			uri.WriteString(":")
-			uri.WriteString(mongoPass)
-		} else {
-			// We do NOT have a password, which warrants a warning.
-			log.Println("WARNING! User given without password!")
-		}
-
-		// Add the divider between `user:pass` and host
-		uri.WriteString("@")
-	}
-	// Append the host[:port] combination
-	uri.WriteString(mongoHost)
-
-	// TODO: Should be checked for timeout.
-	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(uri.String()))
-
+	// If an error occured during the initialization of the repo, now it is time to deal with it.
 	if err != nil {
-		log.Fatalf("connecting to MongoDB: %s", err)
+		log.Fatal(err)
 	}
 
 	// TODO: Should be checked for timeout, too.
 	// Not sure about ongoing processes, for example.
-	defer client.Disconnect(context.TODO())
+	defer repo.Close()
 
-	// Let us get our GridFS bucket.
-	bucket, err := gridfs.NewBucket(client.Database(db), options.GridFSBucket().SetName(fs))
-	if err != nil {
-		log.Fatalf("accessing bucket: %s", err)
-	}
-
-	http.Handle("/", dispatch(getHandler(bucket), postHandler(bucket)))
+	http.Handle("/", dispatch(getHandler(repo), postHandler(repo)))
 
 	log.Printf("Starting webserver on %s", listen)
 	log.Fatal(http.ListenAndServe(listen, nil))
