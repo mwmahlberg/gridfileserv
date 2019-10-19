@@ -23,4 +23,4 @@ RUN apk add --no-cache openssl && wget https://github.com/jwilder/dockerize/rele
     && tar -C /usr/local/bin -xzvf dockerize-alpine-linux-amd64-$DOCKERIZE_VERSION.tar.gz \
     && rm dockerize-alpine-linux-amd64-$DOCKERIZE_VERSION.tar.gz
 
-CMD ["/usr/local/bin/dockerize" ,"-wait","tcp://localhost:27017","/usr/local/bin/gridfileserv"]
+CMD ["/usr/local/bin/dockerize" ,"-wait","tcp://localhost:27017","/usr/local/bin/gridfileserv","mongodb"]
